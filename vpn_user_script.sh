@@ -18,14 +18,14 @@ case "$1" in
 up)
     # _____ your code here _____
     echo "called Up script"
-    notify-send "$(hostname): LINK IS UP." --icon=network-idle
+    #notify-send "$(hostname): LINK IS UP." --icon=network-idle
 
     # _____ end up script ______
 ;;
 down)
     # _____ your code here _____
     echo "called Down script"
-    notify-send "$(hostname): LINK IS DOWN !" --icon=dialog-error
+    #notify-send "$(hostname): LINK IS DOWN !" --icon=dialog-error
 
     # _____ end down script ____
 ;;
