@@ -12,7 +12,7 @@ import signal
 import base64
 import time
 import datetime
-#from config import *
+import logging
 from Queue import Queue
 from threading import Thread
 from subprocess import call, Popen, PIPE, check_output
@@ -241,7 +241,7 @@ euid = os.geteuid()
 if euid != 0:
     # args = ['sudo', '-E', sys.executable] + sys.argv + [os.environ]
     # os.execlpe('sudo', *args)
-    raise RuntimeError('Permission deny! You need to "sudo" or use "./run cli" instead')
+    raise RuntimeError('Permission deny! You need to "sudo"')
 
 # detect Debian based or Redhat based OS's package manager
 pkg_mgr = None
@@ -350,6 +350,7 @@ def get_data():
             i += 1
     else:
         print 'Failed to get VPN servers data\nCheck your network setting and proxy'
+        logger.info('Failed to get VPN servers data. Check your network setting and proxy')
         sys.exit(1)
 
 
@@ -457,19 +458,20 @@ def probe(vpndict):
         del vpndict[dead_server]
 
     print 'Deleted %d dead servers out of %d' % (count, total)
-
+    logging.info('Total servers in list=%d, dead=%d' % (total, count))
 
 def post_action(when):
     """ Change DNS, and do additional behaviors defined by user in user_script.sh"""
     if when == 'up':
         dns_manager('change', dns)
 
-        # call user_script
+        logging.info('Call user_script up')
         call(['bash', user_script_file, 'up'])
 
     elif when == 'down':
         dns_manager('restore')
         # call user_script
+        logging.info('Call user_script down')
         call(['bash', user_script_file, 'down'])
 
 
@@ -491,9 +493,11 @@ def dns_manager(action='backup', DNS='8.8.8.8'):
             for dns in DNS:
                 resolv.write('nameserver ' + dns + '\n')
         print ctext('\nChanged DNS', 'yB').center(38)
+        logging.info('DNS fix: DNS changed')
 
     elif action == "restore":
         print ctext('\nRestore DNS', 'yB')
+        logging.info('DNS fix: DNS restored')
         reverseDNS = ['-a', '/etc/resolv.conf.bak', '/etc/resolv.conf']
         call(['cp'] + reverseDNS)
 
@@ -514,22 +518,28 @@ def vpn_manager(ovpn):
             line = p.stdout.readline()
             if verbose == 'yes':
                 print line,
+                line = line.replace(time.strftime('%c '),'')
+                logging.info(line.replace('\n',''))
             if 'Initialization Sequence Completed' in line:
                 dropped_time = 0
                 print ctext('VPN tunnel established successfully'.center(40), 'B')
+                logging.info('VPN tunnel established successfully')
                 print 'Ctrl+C to quit VPN'.center(40)
             elif 'Restart pause, ' in line and dropped_time <= max_retry:
                 dropped_time += 1
                 print ctext('Vpn has restarted %s time' % dropped_time, 'rB')
+                logging.info('Vpn has restarted %s time' % dropped_time)
             elif dropped_time == max_retry or 'Connection timed out' in line or 'Cannot resolve' in line:
                 dropped_time = 0
                 print line
                 print ctext('Terminate vpn', 'B')
+                logging.info('Terminate VPN tunnel')
                 p.send_signal(signal.SIGINT)
     except KeyboardInterrupt:
         p.send_signal(signal.SIGINT)
         p.wait()
         print ctext('VPN tunnel is terminated'.center(40), 'B')
+        logging.info('VPN tunnel is terminated')
     finally:
         post_action('down')
 
@@ -539,6 +549,17 @@ def signal_term_handler(signal, frame):
     print '\nGot SIGTERM, start exiting\n'
     SIGTERM = 1
     raise KeyboardInterrupt
+
+
+
+class Logger(object):
+    def __init__(self):
+        self.terminal = sys.stdout
+        self.log = open(log_file, "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
 
 # ---------------------------- Main  --------------------------------
 # dead gracefully
@@ -559,9 +580,22 @@ path = os.path.dirname(sys.argv[0])
 config_file = path + '/vpn_config.ini'
 user_script_file = path + '/vpn_user_script.sh'
 temp_vpn_file = path +'/vpn_tmp'
+log_file = '/var/log/vpnproxy.log'
 cfg = Setting(config_file)
 args = sys.argv[1:]
 auto = 0
+
+try:
+    with open(log_file, 'a'):
+        pass
+except Exception:
+    log_file = 0
+    logging.basicConfig(filename = '/dev/null')
+else:
+    #sys.stdout = Logger() # Uncomment and all print will go to log file
+    logging.basicConfig(format = u'[%(asctime)s] %(message)s', level = logging.DEBUG, filename = log_file, datefmt='%c')
+
+logging.info('**********   '+sys.argv[0]+' started.   **********')
 
 # get proxy from config file
 if os.path.exists(config_file):
@@ -627,6 +661,8 @@ sort_by = cfg.sort.values()[0]
 s_country, s_port, s_score = cfg.filter.values()
 dns_fix, dns = cfg.dns.values()
 verbose = cfg.openvpn.values()[0]
+logging.info('Option list: use_proxy={}, sort_by={}, dns_fix={}, verbose={}, auto_mode={}'.format(use_proxy, sort_by, dns_fix, verbose, auto))
+
 
 required = {'openvpn': 0, 'python-requests': 0}
 
@@ -641,6 +677,7 @@ if not os.path.exists('/usr/sbin/openvpn'):
 need = [p for p in required if required[p]]
 if need:
     print ctext('\n**Lack of dependencies**', 'rB')
+    logging.info('Lack of dependencies')
     env = dict(os.environ)
     env['http_proxy'] = 'http://' + proxy + ':' + port
     env['https_proxy'] = 'http://' + proxy + ':' + port
@@ -648,6 +685,7 @@ if need:
     for package in need:
         print '\n___Now installing', ctext(package, 'gB')
         print
+        logging.info('Installing: ' + package)
         call([pkg_mgr, '-y', 'install', package], env=env)
 
     import requests
@@ -665,30 +703,36 @@ connected_servers = []
 while True:
   if SIGTERM:
     print ctext('Goodbye'.center(40), 'gB')
+    logging.info('SIGTERM recived. Exitting...\n')
     sys.exit()
 
   if auto:
     try:
         print ctext('Auto mode', 'gB')
         for index, key in enumerate(ranked[:20]):
-            print  ctext('''\n{}: {}: connecting {}({}) {} ms, {:.2f} mb/s, uptime {}, sessions {}, score {}'''\
-                   .format(time.strftime("%c %Y"), index + 1, vpn_list[key].ip, vpn_list[key].country_short, vpn_list[key].ping,\
+            text = '{}: connecting {}({}) {} ms, {:.2f} mb/s, uptime {}, sessions {}, score {}'\
+                   .format(index + 1, vpn_list[key].ip, vpn_list[key].country_short, vpn_list[key].ping,\
                    vpn_list[key].speed / 1000. ** 2, re.split(',|\.', str(datetime.timedelta(milliseconds=int(vpn_list[key].uptime))))[0],\
-                   vpn_list[key].NumSessions, vpn_list[key].score), 'gB')
+                   vpn_list[key].NumSessions, vpn_list[key].score)
+            print  ctext('\n{} {}'.format(time.strftime("%c"), text), 'gB')
+            logging.info(text)
             vpn_file = vpn_list[key].write_file()
             vpn_file.close()
             vpn_manager(os.path.abspath(vpn_file.name))
             os.remove(os.path.abspath(vpn_file.name))
             if SIGTERM:
+               logging.info('SIGTERM recived. Exitting...\n\n')
                sys.exit()
             time.sleep(10)
         print ctext('Refreshing server list in 60 sec', 'gB')
+        logging.info('Server list ended. Requesting new in 60 sec')
         time.sleep(60)
         ranked, vpn_list = refresh_data()
 
     except KeyboardInterrupt:
         time.sleep(3)
         print "Keyboard Interrupt recived. Exitting..."
+        logging.info('Keyboard Interrupt recived. Exitting...\n')
         sys.exit()
 
   else:
@@ -714,6 +758,7 @@ while True:
         user_input = raw_input(ctext('Vpn command: ', 'gB'))
         if user_input.strip().lower() in ['q', 'quit', 'exit']:
             print ctext('Goodbye'.center(40), 'gB')
+            logging.info('Exitting...\n')
             sys.exit()
         elif user_input.strip().lower() in ('r', 'refresh'):
             ranked, vpn_list = refresh_data()
@@ -734,6 +779,10 @@ while True:
             print ('Connect to ' + vpn_list[ranked[chose]].country_long).center(40)
             print vpn_list[ranked[chose]].ip.center(40)
             connected_servers.append(vpn_list[ranked[chose]].ip)
+            logging.info('{}: connecting {}({}) {} ms, {:.2f} mb/s, uptime {}, sessions {}, score {}'\
+                .format(chose, vpn_list[ranked[chose]].ip, vpn_list[ranked[chose]].country_short, vpn_list[ranked[chose]].ping,\
+                vpn_list[ranked[chose]].speed / 1000. ** 2, re.split(',|\.', str(datetime.timedelta(milliseconds=int(vpn_list[ranked[chose]].uptime))))[0],\
+                vpn_list[ranked[chose]].NumSessions, vpn_list[ranked[chose]].score))
             vpn_file = vpn_list[ranked[chose]].write_file()
             vpn_file.close()
             vpn_manager(os.path.abspath(vpn_file.name))
