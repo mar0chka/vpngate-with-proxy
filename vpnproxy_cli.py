@@ -10,6 +10,7 @@ __email__ = "nguyenbaduc.tin@gmail.com"
 import os
 import signal
 import base64
+import random
 import time
 import datetime
 import logging
@@ -527,8 +528,8 @@ def vpn_manager(ovpn):
                 print 'Ctrl+C to quit VPN'.center(40)
             elif 'Restart pause, ' in line and dropped_time <= max_retry:
                 dropped_time += 1
-                print ctext('Vpn has restarted %s time' % dropped_time, 'rB')
-                logging.info('Vpn has restarted %s time' % dropped_time)
+                print ctext('Vpn has restarted %d time' % dropped_time, 'rB')
+                logging.info('Vpn has restarted %d time' % dropped_time)
             elif dropped_time == max_retry or 'Connection timed out' in line or 'Cannot resolve' in line:
                 dropped_time = 0
                 print line
@@ -584,6 +585,9 @@ log_file = '/var/log/vpnproxy.log'
 cfg = Setting(config_file)
 args = sys.argv[1:]
 auto = 0
+auto_limit = 20  # Limit servers to connect in this mode by this num
+random_mode = 1  # Random choice in auto mode
+random_limit = 4 # Limit each random round with this num
 
 try:
     with open(log_file, 'a'):
@@ -708,10 +712,25 @@ while True:
 
   if auto:
     try:
+        choicelist = []
+        if random_mode:
+            newranked = []
+            list = range(0,auto_limit)
+            while list:
+                choice = random.choice(list[:random_limit])
+                list.remove(choice)
+                choicelist.append(choice)
+            for i in choicelist:
+                newranked.append(ranked[i])
+            ranked = newranked
+            print ctext('Random server choice on: ' + str(choicelist), 'yB')
+            logging.info('Random server choice on: ' + str(choicelist))
+
         print ctext('Auto mode', 'gB')
-        for index, key in enumerate(ranked[:20]):
+        for index, key in enumerate(ranked[:auto_limit]):
+            index = choicelist[index] if choicelist else index 
             text = '{}: connecting {}({}) {} ms, {:.2f} mb/s, uptime {}, sessions {}, score {}'\
-                   .format(index + 1, vpn_list[key].ip, vpn_list[key].country_short, vpn_list[key].ping,\
+                   .format(index, vpn_list[key].ip, vpn_list[key].country_short, vpn_list[key].ping,\
                    vpn_list[key].speed / 1000. ** 2, re.split(',|\.', str(datetime.timedelta(milliseconds=int(vpn_list[key].uptime))))[0],\
                    vpn_list[key].NumSessions, vpn_list[key].score)
             print  ctext('\n{} {}'.format(time.strftime("%c"), text), 'gB')
